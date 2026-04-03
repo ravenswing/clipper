@@ -18,3 +18,7 @@ target
 # Added by cargo
 
 /target
+
+
+# User defined
+data/
