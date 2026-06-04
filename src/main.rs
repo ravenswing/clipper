@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub mod sdf;
+use sdf::SDFile;
+
 fn main() -> Result<()> {
     println!("Welcome to Clipper");
 
