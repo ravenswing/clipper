@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, anyhow};
+use memchr::memchr;
 use std::{fs::File, path::PathBuf};
 
-use crate::sdf::io::{pos_read_bytes, scan_offsets};
+use crate::sdf::io::{pos_read_bytes, scan_offsets, trim_delim};
 
 pub struct SDFile {
     path: PathBuf,
@@ -69,5 +70,30 @@ impl SDFile {
             .copied()
             .unwrap_or(self.byte_len);
         Ok((start, end))
+    }
+
+    // Read a single record from a file to owned `String`.
+    fn read_record(&self, idx: usize) -> Result<String> {
+        let (start, end) = self.get_record_loc(idx)?;
+        let buf = self.read_bytes(start, end - start)?;
+        // Note: Use lossy decoding so legacy Latin-1 / ISO-8859-1 SDFs don't crashthe parser.
+        // Invalid bytes become U+FFFD REPLACEMENT CHARACTER.
+        let mut text = String::from_utf8_lossy(&buf).into_owned();
+        trim_delim(&mut text);
+        Ok(text)
+    }
+
+    /// Read only the bytes needed to extract the title, without loading the
+    /// full record into memory.
+    fn read_title(&self, idx: usize) -> Result<String> {
+        let (start, end) = self.get_record_loc(idx)?;
+        // only read up to a max of 1kB for the title
+        let len = 1024u64.min(end - start);
+        let buf = self.read_bytes(start, len)?;
+        // Search for the end of the line char
+        let eol_loc = memchr(b'\n', &buf).unwrap_or(buf.len());
+        // Convert line and trim new line etc before returning
+        let line = String::from_utf8_lossy(&buf[..eol_loc]);
+        Ok(line.trim_end_matches('\r').trim_end().to_string())
     }
 }

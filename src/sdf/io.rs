@@ -12,6 +12,8 @@ use std::{
     io::{BufReader, Read, Seek, SeekFrom},
 };
 
+const DELIMITER: &'static str = "$$$$";
+
 /// Scan the records in `file` and return the byte offsets for the start of each record.
 pub fn scan_offsets(file: &mut File, total_file_bytes: u64) -> Result<Vec<u64>> {
     // Use a cache compatible buffer size
@@ -127,4 +129,20 @@ pub fn pos_read_bytes(file: &File, mut offset: u64, mut buf: &mut [u8]) -> Resul
         offset += n as u64;
     }
     Ok(())
+}
+
+/// Strip a trailing `$$$$` delimiter line from a record buffer in place.
+/// Whilst maintaining the EOL character.
+pub fn trim_delim(text: &mut String) {
+    while text.ends_with('\n') || text.ends_with('\r') {
+        text.pop();
+    }
+    if text.ends_with(DELIMITER) {
+        let new_len = text.len() - DELIMITER.len();
+        text.truncate(new_len);
+        while text.ends_with('\n') || text.ends_with('\r') {
+            text.pop();
+        }
+    }
+    text.push('\n');
 }
