@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use memchr::memchr;
-use std::{fs::File, path::PathBuf};
+use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use crate::sdf::io::{pos_read_bytes, scan_offsets, trim_delim};
 
@@ -103,6 +103,15 @@ impl SDFile {
             .map(|i| self.read_title(i))
             .collect()
     }
+
+    /// Return the unique titles in the sdf file
+    pub fn unique(&self) -> Result<Vec<String>> {
+        let mut unique: HashSet<String> = HashSet::with_capacity(self.byte_offsets.len());
+        for i in 0..self.byte_offsets.len() {
+            unique.insert(self.read_title(i)?);
+        }
+        Ok(unique.into_iter().collect())
+    }
 }
 
 #[cfg(test)]
@@ -131,6 +140,9 @@ mod tests {
 
     #[test]
     fn titles() {
+        use std::fs::File;
+        use std::io::Write;
+
         let sdf = SDFile::open(TEST_FILE.into()).unwrap();
         let true_titles = vec!["S388-0404", "S395-0132", "T655-0622", "T655-0634"];
         // test individual read_title calls
@@ -140,10 +152,49 @@ mod tests {
                 .filter_map(Result::ok)
                 .collect()
         };
+        assert_eq!(titles_from_read_title.len(), 4);
         assert_eq!(titles_from_read_title, true_titles);
 
         // test SDFile::titles
-        let titles_from_titles = sdf.titles();
-        assert_eq!(titles_from_titles.unwrap(), true_titles);
+        let titles_from_titles = sdf.titles().unwrap();
+        assert_eq!(titles_from_titles.len(), 4);
+        assert_eq!(titles_from_titles, true_titles);
+
+        // test SDFile::unique
+        let all_unique = sdf.unique().unwrap();
+        assert_eq!(all_unique.len(), 4);
+
+        assert_eq!(
+            all_unique.into_iter().collect(),
+            true_titles.into_iter().collect()
+        );
+
+        // Create a temp file with duplicate titles
+        let tmp_path = std::env::temp_dir().join("duplicate.sdf");
+        let mut f = File::create(&tmp_path).unwrap();
+        f.write_all(b"Mol_A\nbody\n$$$$\n").unwrap();
+        f.write_all(b"Mol_B\nbody\n$$$$\n").unwrap();
+        f.write_all(b"Mol_A\nbody\n$$$$\n").unwrap(); // Duplicated!
+
+        let dupe_sdf = SDFile::open(tmp_path.clone()).unwrap();
+
+        let dupe_titles_all = dupe_sdf.unique().unwrap();
+        let dupe_titles_unique = dupe_sdf.unique().unwrap();
+
+        assert_eq!(dupe_titles_all.len(), 3);
+        assert_eq!(dupe_titles_unique.len(), 2);
+
+        // Because the order of items coming out of a HashSet is non-deterministic,
+        // we convert both our expected array and the result back into HashSets for comparison.
+        let expected: HashSet<String> = vec!["Mol_A".to_string(), "Mol_B".to_string()]
+            .into_iter()
+            .collect();
+
+        let actual: HashSet<String> = unique_titles.into_iter().collect();
+
+        assert_eq!(actual, expected);
+
+        // 6. Clean up the temp file so we don't litter the OS
+        std::fs::remove_file(tmp_path).unwrap();
     }
 }
