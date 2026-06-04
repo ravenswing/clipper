@@ -73,7 +73,7 @@ impl SDFile {
     }
 
     // Read a single record from a file to owned `String`.
-    fn read_record(&self, idx: usize) -> Result<String> {
+    pub fn read_record(&self, idx: usize) -> Result<String> {
         let (start, end) = self.get_record_loc(idx)?;
         let buf = self.read_bytes(start, end - start)?;
         // Note: Use lossy decoding so legacy Latin-1 / ISO-8859-1 SDFs don't crashthe parser.
@@ -85,7 +85,7 @@ impl SDFile {
 
     /// Read only the bytes needed to extract the title, without loading the
     /// full record into memory.
-    fn read_title(&self, idx: usize) -> Result<String> {
+    pub fn read_title(&self, idx: usize) -> Result<String> {
         let (start, end) = self.get_record_loc(idx)?;
         // only read up to a max of 1kB for the title
         let len = 1024u64.min(end - start);
@@ -95,5 +95,55 @@ impl SDFile {
         // Convert line and trim new line etc before returning
         let line = String::from_utf8_lossy(&buf[..eol_loc]);
         Ok(line.trim_end_matches('\r').trim_end().to_string())
+    }
+
+    /// Collect all the titles from a file
+    pub fn titles(&self) -> Result<Vec<String>> {
+        (0..self.byte_offsets.len())
+            .map(|i| self.read_title(i))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const TEST_FILE: &str = "./data/tiny_test_set.sdf";
+
+    #[test]
+    fn file_reading() {
+        let sdf = SDFile::open(TEST_FILE.into()).unwrap();
+        assert_eq!(sdf.len(), 4);
+        assert_eq!(sdf.is_empty(), false);
+        assert_eq!(sdf.get_record_loc(0).unwrap(), (0, 5639));
+
+        let lines: Vec<String> = sdf
+            .read_record(0)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+
+        assert_eq!(lines[0], "S388-0404");
+        assert_eq!(lines[1], "                    3D");
+        assert_eq!(lines[2], " Schrodinger Suite 2021-4.");
+    }
+
+    #[test]
+    fn titles() {
+        let sdf = SDFile::open(TEST_FILE.into()).unwrap();
+        let true_titles = vec!["S388-0404", "S395-0132", "T655-0622", "T655-0634"];
+        // test individual read_title calls
+        let titles_from_read_title: Vec<String> = {
+            (0..4)
+                .map(|i| sdf.read_title(i))
+                .filter_map(Result::ok)
+                .collect()
+        };
+        assert_eq!(titles_from_read_title, true_titles);
+
+        // test SDFile::titles
+        let titles_from_titles = sdf.titles();
+        assert_eq!(titles_from_titles.unwrap(), true_titles);
     }
 }

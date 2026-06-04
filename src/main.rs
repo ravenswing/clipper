@@ -8,16 +8,35 @@ use sdf::SDFile;
 fn main() -> Result<()> {
     println!("Welcome to Clipper");
 
-    let sdf = fs::read_to_string("./data/tiny_test_set.sdf")?;
+    let test_file = "./data/tiny_test_set.sdf";
 
-    let mols: Vec<Vec<&str>> = sdf
-        .trim()
-        .split("$$$$")
-        .map(|x| x.trim().lines().collect())
+    let sdf = SDFile::open(test_file.into()).unwrap();
+
+    let len = sdf.len();
+    println!("Number of entries in file: {len}");
+
+    println!(
+        "Location of first entry: {:?}",
+        sdf.get_record_loc(0).unwrap()
+    );
+
+    let lines: Vec<String> = sdf
+        .read_record(0)
+        .unwrap()
+        .lines()
+        .map(String::from)
         .collect();
+    println!("Location of first entry: {:?}", lines[0]);
+    println!("Location of first entry: {:?}", lines[1]);
+    println!("Location of first entry: {:?}", lines[2]);
 
-    println!("{:?}", mols);
-    println!("{:?}", mols.len());
+    let titles: Vec<String> = {
+        (0..4)
+            .map(|i| sdf.read_title(i))
+            .filter_map(Result::ok)
+            .collect()
+    };
+    println!("Location of first entry: {:?}", titles);
 
     Ok(())
 }
