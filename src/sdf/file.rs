@@ -140,9 +140,6 @@ mod tests {
 
     #[test]
     fn titles() {
-        use std::fs::File;
-        use std::io::Write;
-
         let sdf = SDFile::open(TEST_FILE.into()).unwrap();
         let true_titles = vec!["S388-0404", "S395-0132", "T655-0622", "T655-0634"];
         // test individual read_title calls
@@ -159,26 +156,38 @@ mod tests {
         let titles_from_titles = sdf.titles().unwrap();
         assert_eq!(titles_from_titles.len(), 4);
         assert_eq!(titles_from_titles, true_titles);
+    }
+
+    #[test]
+    fn unique() {
+        use std::fs::File;
+        use std::io::Write;
+
+        let sdf = SDFile::open(TEST_FILE.into()).unwrap();
+        let true_titles = vec!["S388-0404", "S395-0132", "T655-0622", "T655-0634"];
 
         // test SDFile::unique
         let all_unique = sdf.unique().unwrap();
         assert_eq!(all_unique.len(), 4);
 
         assert_eq!(
-            all_unique.into_iter().collect(),
-            true_titles.into_iter().collect()
+            all_unique.into_iter().collect::<HashSet<String>>(),
+            true_titles
+                .into_iter()
+                .map(|s| s.to_string())
+                .collect::<HashSet<String>>()
         );
 
         // Create a temp file with duplicate titles
-        let tmp_path = std::env::temp_dir().join("duplicate.sdf");
-        let mut f = File::create(&tmp_path).unwrap();
+        let sdf_with_dupes = std::env::temp_dir().join("duplicate.sdf");
+        let mut f = File::create(&sdf_with_dupes).unwrap();
         f.write_all(b"Mol_A\nbody\n$$$$\n").unwrap();
         f.write_all(b"Mol_B\nbody\n$$$$\n").unwrap();
         f.write_all(b"Mol_A\nbody\n$$$$\n").unwrap(); // Duplicated!
 
-        let dupe_sdf = SDFile::open(tmp_path.clone()).unwrap();
+        let dupe_sdf = SDFile::open(sdf_with_dupes.clone()).unwrap();
 
-        let dupe_titles_all = dupe_sdf.unique().unwrap();
+        let dupe_titles_all = dupe_sdf.titles().unwrap();
         let dupe_titles_unique = dupe_sdf.unique().unwrap();
 
         assert_eq!(dupe_titles_all.len(), 3);
@@ -189,12 +198,11 @@ mod tests {
         let expected: HashSet<String> = vec!["Mol_A".to_string(), "Mol_B".to_string()]
             .into_iter()
             .collect();
-
-        let actual: HashSet<String> = unique_titles.into_iter().collect();
+        let actual: HashSet<String> = dupe_titles_unique.into_iter().collect();
 
         assert_eq!(actual, expected);
 
-        // 6. Clean up the temp file so we don't litter the OS
-        std::fs::remove_file(tmp_path).unwrap();
+        // Cleanup temp sdf
+        std::fs::remove_file(sdf_with_dupes).unwrap();
     }
 }
