@@ -1,8 +1,13 @@
 use anyhow::{Context, Result, anyhow};
 use memchr::memchr;
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{
+    collections::HashSet,
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+};
 
-use crate::sdf::io::{pos_read_bytes, scan_offsets, trim_delim};
+use crate::sdf::io::{BUF_SIZE, pos_read_bytes, scan_offsets, trim_delim};
 
 pub struct SDFile {
     path: PathBuf,
@@ -111,6 +116,129 @@ impl SDFile {
             unique.insert(self.read_title(i)?);
         }
         Ok(unique.into_iter().collect())
+    }
+
+    /// Split sdf into multiple chunks
+    pub fn split(
+        &self,
+        n_records: Option<usize>,
+        n_chunks: Option<usize>,
+        output_dir: Option<&Path>,
+    ) -> Result<Vec<PathBuf>> {
+        let input = self.path;
+
+        // get the output directory
+        let out_dir = match output_dir {
+            Some(d) => d.to_path_buf(),
+            None => input
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+        };
+        // set the output file stem
+        let stem = input
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "chunk".to_string());
+
+        // Calculate the sizes of each output file, handling both inputs
+        let sizes = self.calc_split_sizes(n_records, n_chunks)?;
+
+        let in_file = File::open(input)
+            .with_context(|| format!("failed to open input file: {}", input.display()))?;
+        let mut reader = BufReader::with_capacity(BUF_SIZE, in_file);
+
+        let mut out_paths = Vec::with_capacity(sizes.len());
+        let mut record_idx = 0usize;
+        let mut cursor: u64 = 0; // current byte position in input
+
+        for (i, n_records) in sizes.iter().enumerate() {
+            let first = record_idx;
+            let last_exclusive = record_idx + n_records;
+            let (start, _) = self.get_record_loc(first)?;
+            let end = if last_exclusive < total {
+                self.get_record_loc(last_exclusive)?.0
+            } else {
+                // Past-the-end: use file length via the last record's end.
+                self.get_record_loc(total - 1)?.1
+            };
+
+            // Seek forward in the input only when there are unread bytes between
+            // `cursor` and `start` (defensive — for a well-formed file this is a
+            // no-op after the first chunk).
+            if start != cursor {
+                file_reader
+                    .seek(SeekFrom::Start(start))
+                    .with_context(|| format!("seek to byte {} failed", start))?;
+                cursor = start;
+            }
+
+            let out_path = out_dir.join(format!(
+                "{stem}_{chunk_idx:0pad$}.sdf",
+                stem = stem,
+                chunk_idx = chunk_idx,
+                pad = pad
+            ));
+            let out_file = File::create(&out_path)
+                .with_context(|| format!("failed to create output file: {}", out_path.display()))?;
+            let mut writer = BufWriter::with_capacity(COPY_BUF_SIZE, out_file);
+
+            copy_bytes(&mut file_reader, &mut writer, end - cursor)?;
+            writer
+                .flush()
+                .with_context(|| format!("failed to flush: {}", out_path.display()))?;
+            cursor = end;
+            record_idx = last_exclusive;
+            out_paths.push(out_path);
+        }
+
+        Ok(out_paths)
+    }
+
+    /// Calculate split files sizes ahead of time
+    /// Allows for pre-allocating output Vec
+    /// Errors on invalid combinations of inputs / 0s
+    fn calc_split_sizes(
+        &self,
+        n_records: Option<usize>,
+        n_chunks: Option<usize>,
+    ) -> Result<Vec<usize>> {
+        let total = self.len();
+        // Return early if no reocrds detected
+        if total == 0 {
+            return Err(anyhow!("split: no records in file"));
+        }
+
+        let n = match (n_records, n_chunks) {
+            // Filter out invalid split requests
+            // maybe use an enum in the future??
+            (Some(_), Some(_)) => {
+                return Err(anyhow!(
+                    "split: provide exactly one of `n_entries` or `n_chunks` not both"
+                ));
+            }
+            (None, None) => {
+                return Err(anyhow!(
+                    "split: one of `n_entries` or `n_chunks` is required"
+                ));
+            }
+            (Some(0), _) | (_, Some(0)) => return Err(anyhow!("split: size/count must be >= 1")),
+            //
+            (Some(k), None) => total.div_ceil(k),
+            (None, Some(n)) => n.min(total),
+        };
+
+        let full_files = total / n;
+        let remainder = total % n;
+
+        match remainder {
+            0 => Ok(vec![full_files; n]),
+            _ => {
+                let mut sizes = vec![full_files; n];
+                sizes.push(remainder);
+                Ok(sizes)
+            }
+        }
     }
 }
 

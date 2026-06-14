@@ -1,5 +1,8 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use memchr::memmem;
+use std::fs::{File, OpenOptions};
+use std::io::{BufReader, Read, Seek, SeekFrom, copy};
+use std::path::Path;
 
 // Need to have variable imports based on operating system!!
 #[cfg(unix)]
@@ -7,17 +10,12 @@ use std::os::unix::fs::FileExt;
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
 
-use std::{
-    fs::File,
-    io::{BufReader, Read, Seek, SeekFrom},
-};
-
 const DELIMITER: &'static str = "$$$$";
+pub const BUF_SIZE: usize = 1 << 17; // 128 KiB
 
 /// Scan the records in `file` and return the byte offsets for the start of each record.
 pub fn scan_offsets(file: &mut File, total_file_bytes: u64) -> Result<Vec<u64>> {
     // Use a cache compatible buffer size
-    const BUF_SIZE: usize = 1 << 17; // 128 KiB
     let delimiter = "$$$$".as_bytes();
     // memchr fast find for delimiter
     let finder = memmem::Finder::new(delimiter);
@@ -145,4 +143,47 @@ pub fn trim_delim(text: &mut String) {
         }
     }
     text.push('\n');
+}
+
+/// Streams a specific range of bytes from an input file to a new output file.
+/// `start` and `end` are inclusive.
+pub fn stream_bytes<P: AsRef<Path>>(
+    input_path: P,
+    output_path: P,
+    start: u64,
+    end: u64,
+) -> Result<()> {
+    // Double check inputs
+    if start > end {
+        anyhow::bail!("Start byte ({start}) cannot be greater than end byte ({end})",);
+    }
+
+    // Open the input file
+    let mut input_file = File::open(&input_path)
+        .with_context(|| format!("Failed to open input file: {:?}", input_path.as_ref()))?;
+
+    // Seek to the starting byte
+    input_file
+        .seek(SeekFrom::Start(start))
+        .context("Failed to seek to the start position in the input file")?;
+
+    // Create the new output file using OpenOptions
+    // .create_new(true) ensures it fails if the file already exists, enforcing a "new" file.
+    let mut output_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&output_path)
+        .with_context(|| format!("Failed to create output file: {:?}", output_path.as_ref()))?;
+
+    // Calculate the number of bytes to read
+    let length = end - start + 1;
+
+    // Use `.take()` to create an adapter that reads at most `length` bytes
+    let mut limited_reader = input_file.take(length);
+
+    // Stream the bytes from the limited reader into the output file
+    copy(&mut limited_reader, &mut output_file)
+        .context("Failed to stream data from input to output file")?;
+
+    Ok(())
 }
